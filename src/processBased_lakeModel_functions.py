@@ -2154,7 +2154,8 @@ def prodcons_module_woDOCL(
         alpha_gpp = 0.1/3600,
         beta_gpp = 4.2/3600,
         o2_to_chla = 41.5/3600,
-        GPP_inc = 1): 
+        LIGHTUSEBYPHOTOS = 0.3,
+        beta = 0.8): 
 
     
     ## (1) HEAT ADDITION
@@ -2169,6 +2170,8 @@ def prodcons_module_woDOCL(
     docl = docln
     pocr = pocrn
     pocl = pocln
+
+    # docr docl pocr pocl
 
 
     # light attenuation
@@ -2205,10 +2208,10 @@ def prodcons_module_woDOCL(
     #npp = p_max * (1 - np.exp(-IP * H/p_max)) * TP * conversion_constant * theta_npp**(u - 20) * volume
     
     
-    def fun(y, a, consumption, npp, growth, temp):
+    def fun(y, a, consumption, npp, growth, temp, beta):
         #"Production and destruction term for a simple linear model."
-        o2n, docrn, docln, pocrn, pocln,  = y
-        resp_docr, resp_docl, resp_pocl, resp_pocr, = a
+        o2n, docrn, docln, pocrn, pocln,  = y # docr docl pocr pocl
+        resp_docr, resp_docl, resp_pocr, resp_pocl, = a # RL BUG!
         consumption = consumption.item()
         npp = npp.item() # npp.item()
         growth = growth #growth.item()
@@ -2220,19 +2223,20 @@ def prodcons_module_woDOCL(
         q = 0.015
         e = 0.95
         
+        # docr docl pocr pocl
         #Production matrix (5x5) <---- EM: Restructure code for ease of viewing
         p = np.zeros((5,5), dtype=float) #Create matrix of 0s
         p[0,0]= npp * oxygen #O2 production from NPP
         p[1,3]=(pocrn * resp_pocr * consumption) #DOC-R from POCr respiration
-        p[2,4]= 0.2 * npp * carbon #POCl from POCl respiration + small NPP term (pocln * resp_pocl * consumption) +
-        p[4,4]=(0.8*npp * carbon) #POCl production from NPP
+        p[2,4]= (1-beta) * npp * carbon #DOC-L from NPP; NOT from POCl respiration + small NPP term (pocln * resp_pocl * consumption) +
+        p[4,4]=(beta * npp * carbon) #POCl production from NPP
         
         #Destruction matrix (5x5)
         d = np.zeros((5,5), dtype=float) #create matrix of 0s
         d[0,1] = carbon_oxygen * (docrn * resp_docr * consumption) #O2 destroyed from DOCr consumption
         d[0,2] = carbon_oxygen * (docln * resp_docl * consumption) #O2 destroyed from DOCl consumption
         d[0,3] = carbon_oxygen * (pocrn * resp_pocr * consumption) #O2 destroyed from POCr consumption
-        d[0,4] = carbon_oxygen * (pocln * resp_pocl * consumption) #O2 destroyed from POCl consumption
+        d[0,4] = 0.9 * carbon_oxygen * (pocln * resp_pocl * consumption) #O2 destroyed from POCl consumption
         
         #diagonal destruction
         d[1,1] = (docrn * resp_docr * consumption) #DOCr consumption
@@ -2253,7 +2257,7 @@ def prodcons_module_woDOCL(
         #breakpoint()H
         return p,d
 
-    def solve_mprk(fun, y0, dt, dx, resp, theta_r, u, volume, GPP_inc, area, k_half, H, sw_to_par, IP_m, TP, theta_npp, kd_light, depth, Jsw,
+    def solve_mprk(fun, y0, dt, dx, resp, theta_r, u, volume, LIGHTUSEBYPHOTOS, beta, area, k_half, H, sw_to_par, IP_m, TP, theta_npp, kd_light, depth, Jsw,
                    p = 1.0 / 86400, h = 55 / 4.16, m = 2 /1000):
         
         # par https://strang.smhi.se/extraction/units-conversion.html
@@ -2296,7 +2300,7 @@ def prodcons_module_woDOCL(
 
         P_I = P_max * (1 - exp(- (alpha_P*LIGHTUSEBYPHOTOS) * PAR/P_max)) # mol C/m2/s
 
-        k_TP = 0.03 # mg/L
+        k_TP = 0.06/1000 # mg/L
 
         f_TP = TP / (k_TP + TP) # dimensionless
 
@@ -2310,7 +2314,7 @@ def prodcons_module_woDOCL(
         
     
         #breakpoint() 
-        p0, d0 = fun(y[:, ci],  resp, consumption, npp, growth, temp)
+        p0, d0 = fun(y[:, ci],  resp, consumption, npp, growth, temp, beta)
         #breakpoint()
         p0 = np.asarray(p0)
         d0 = np.asarray(d0)
@@ -2330,7 +2334,7 @@ def prodcons_module_woDOCL(
     
         # Run the algorithm a second time:
         # Get the production and destruction term:
-        p, d = fun(c0,  resp, consumption, npp, growth, temp)
+        p, d = fun(c0,  resp, consumption, npp, growth, temp, beta)
         p = np.asarray(p)
         d = np.asarray(d)
     
@@ -2369,9 +2373,10 @@ def prodcons_module_woDOCL(
         else:
             H_in = H[dep - 1]
         
+        # docr docl pocr pocl 
         mprk_res = solve_mprk(fun, y0 =  [o2n[dep], docrn[dep], docln[dep], pocrn[dep], pocln[dep]], dt = dt, dx = dx,
                resp = [resp_docr, resp_docl, resp_pocr, resp_pocl], theta_r = theta_r, u = u[dep],
-               volume = volume[dep], GPP_inc =GPP_inc, area = area[dep],k_half = k_half,
+               volume = volume[dep], LIGHTUSEBYPHOTOS =LIGHTUSEBYPHOTOS, beta = beta, area = area[dep],k_half = k_half,
                H = H[dep], sw_to_par = sw_to_par, IP_m = IP_m, TP = TP, theta_npp = theta_npp,
                kd_light = kd_light, depth = depth[dep], Jsw = H_in)
         o2[dep], docr[dep], docl[dep], pocr[dep], pocl[dep] = mprk_res[0]
@@ -4092,7 +4097,8 @@ def run_wq_model(
   lake_num = 1,
   f_sod = 1e-2,
   d_thick = 0.001,
-  GPP_inc = 1
+  LIGHTUSEBYPHOTOS = 0.3,
+  beta = 0.8
   ):
     
   ## linearization of driver data, so model can have dynamic step
@@ -4604,7 +4610,8 @@ def run_wq_model(
         resp_poc = resp_poc,
         resp_pocl=resp_pocl,
         resp_pocr=resp_pocr,
-        GPP_inc = GPP_inc)
+        LIGHTUSEBYPHOTOS = LIGHTUSEBYPHOTOS,
+        beta = beta)
     
     o2 = prodcons_res['o2']
     docr = prodcons_res['docr']

@@ -211,7 +211,7 @@ for lake_num in range(1, num_lakes + 1):
         IP=model_params["IP"]/86400,
         f_sod=model_params["f_sod"],
         d_thick=model_params["d_thick"],
-        GPP_inc = model_params["GPP_inc"],
+        LIGHTUSEBYPHOTOS = model_params["LIGHTUSEBYPHOTOS"],
 
         # carbon pool partitioning
         prop_oc_docr=model_params["prop_oc_docr"],
@@ -800,3 +800,74 @@ plt.show()
 # pd.DataFrame(doc_all).to_csv("../parameterization/output/Run_"+str(label)+"/doc.csv", index = False)
 # pd.DataFrame(poc_all).to_csv("../parameterization/output/Run_"+str(label)+"/poc.csv", index = False)
 # pd.DataFrame(secchi).to_csv("../parameterization/output/Run_"+str(label)+"/secchi.csv", index = False)
+
+
+# test clustering script
+# tendencies?
+dO2_dt = np.gradient(o2, dt, axis = 1)
+
+# gradients
+dO2_dz = np.gradient(o2, dx, axis = 0)
+dT_dz = np.gradient(temp, dx, axis = 0)
+
+# boundary states
+ice_bc = np.tile(icethickness, (len(depth), 1))
+clarity_bc = np.tile(secchi, (len(depth), 1))
+
+# feature matrix
+mask = np.isfinite(o2)
+X = np.column_stack([
+    o2.ravel(),
+    dO2_dt.ravel(),
+    dO2_dz.ravel(),
+    temp.ravel(),
+    dT_dz.ravel(),
+    ice_bc.ravel(),
+    clarity_bc.ravel()
+])
+
+#breakpoint()
+
+X = X[mask.ravel()]
+
+from sklearn.preprocessing import RobustScaler
+
+scaler = RobustScaler()
+X_scaled = scaler.fit_transform(X)
+
+X_scaled[:, 0] *= 2.0  # weight DO more heavily
+X_scaled[:, 1] *= 2.0  # weight gradient heavily
+
+# find regimes
+import hdbscan 
+
+cluster = hdbscan.HDBSCAN(min_cluster_size=4, min_samples=20, metric = 'euclidean')
+
+labels = cluster.fit_predict(X_scaled)
+
+cluster_map = np.full(o2.shape, np.nan)
+
+labels = labels.reshape(len(depth), -1)
+cluster_map = labels
+cluster_map = cluster_map.reshape(o2.shape)
+
+
+
+fig, ax = plt.subplots(figsize=(15,5))
+sns.heatmap(cluster_map , cmap=plt.cm.get_cmap('Spectral_r'),  xticklabels=1000, yticklabels=2)
+ax.contour(np.arange(.5, temp.shape[1]), np.arange(.5, temp.shape[0]), calc_dens(temp), levels=[999],
+           colors=['black', 'gray'],
+           linestyles = 'dotted')
+ax.set_ylabel("Depth (m)", fontsize=15)
+ax.set_xlabel("Time", fontsize=15)    
+ax.collections[0].colorbar.set_label("Cluster")
+xticks_ix = np.array(ax.get_xticks()).astype(int)
+time_label = times[xticks_ix]
+nelement = len(times)//N_pts
+#time_label = time_label[::nelement]
+#ax.xaxis.set_major_locator(plt.MaxNLocator(N_pts * n_years))
+ax.set_xticklabels(time_label.strftime("%d-%m-%y"), rotation=45, ha = 'right')
+yticks_ix = np.array(ax.get_yticks()).astype(int)
+depth_label = yticks_ix / 2
+ax.set_yticklabels(depth_label, rotation=0)
+plt.show()
